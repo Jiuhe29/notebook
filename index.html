@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vue 3 多组件记事本</title>
+    <!-- 引入 Tailwind CSS 用于样式 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 Vue 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- 引入 FontAwesome 图标 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        /* 自定义滚动条样式 */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+
+        /* 简单的过渡动画 */
+        .fade-enter-active, .fade-leave-active {
+            transition: opacity 0.3s ease;
+        }
+        .fade-enter-from, .fade-leave-to {
+            opacity: 0;
+        }
+
+        .list-enter-active, .list-leave-active {
+            transition: all 0.4s ease;
+        }
+        .list-enter-from, .list-leave-to {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 h-screen overflow-hidden">
+
+    <div id="app" class="h-full flex flex-col">
+        <!-- 头部区域 -->
+        <header class="bg-white shadow-sm p-4 z-10">
+            <div class="max-w-5xl mx-auto flex justify-between items-center">
+                <h1 class="text-2xl font-bold text-gray-700 flex items-center gap-2">
+                    <i class="fa-solid fa-book-open text-blue-500"></i>
+                    随心记
+                </h1>
+                <div class="text-sm text-gray-500">
+                    已记录 <span class="font-bold text-blue-600">{{ notes.length }}</span> 条笔记
+                </div>
+            </div>
+        </header>
+
+        <!-- 主内容区域 -->
+        <main class="flex-1 overflow-y-auto p-4 sm:p-6 relative">
+            <div class="max-w-5xl mx-auto">
+                
+                <!-- 搜索栏 -->
+                <div class="mb-6 relative">
+                    <i class="fa-solid fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+                    <input 
+                        v-model="searchQuery" 
+                        type="text" 
+                        placeholder="搜索笔记内容..." 
+                        class="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-400 transition shadow-sm"
+                    >
+                </div>
+
+                <!-- 空状态提示 -->
+                <div v-if="filteredNotes.length === 0" class="flex flex-col items-center justify-center h-64 text-gray-400">
+                    <i class="fa-regular fa-clipboard text-5xl mb-4"></i>
+                    <p v-if="notes.length === 0">还没有笔记，点击右下角添加吧！</p>
+                    <p v-else>没有找到匹配的笔记。</p>
+                </div>
+
+                <!-- 笔记列表组件 (Grid 布局) -->
+                <transition-group name="list" tag="div" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pb-20">
+                    <note-card 
+                        v-for="note in filteredNotes" 
+                        :key="note.id" 
+                        :note="note"
+                        @edit="openEditor"
+                        @remove="deleteNote"
+                    ></note-card>
+                </transition-group>
+            </div>
+        </main>
+
+        <!-- 悬浮添加按钮 -->
+        <button 
+            @click="openEditor(null)"
+            class="fixed bottom-6 right-6 w-14 h-14 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-lg flex items-center justify-center text-2xl transition transform hover:scale-110 active:scale-95 focus:outline-none z-20"
+        >
+            <i class="fa-solid fa-plus"></i>
+        </button>
+
+        <!-- 编辑器模态框组件 -->
+        <transition name="fade">
+            <note-editor 
+                v-if="showEditor" 
+                :initial-data="currentNote"
+                @close="closeEditor"
+                @save="saveNote"
+            ></note-editor>
+        </transition>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, watch } = Vue;
+
+        // --- 组件 1: NoteCard (便签卡片) ---
+        // 职责：展示单个便签的数据，发出编辑和删除事件
+        const NoteCard = {
+            props: ['note'],
+            template: `
+                <div 
+                    class="rounded-xl shadow-sm p-5 hover:shadow-md transition duration-300 transform hover:-translate-y-1 relative group cursor-pointer border border-transparent"
+                    :class="colorClass"
+                    @click="$emit('edit', note)"
+                >
+                    <div class="flex justify-between items-start mb-2">
+                        <h3 class="font-bold text-lg text-gray-800 line-clamp-1 pr-6">{{ note.title || '无标题' }}</h3>
+                        <button 
+                            @click.stop="$emit('remove', note.id)"
+                            class="text-gray-400 hover:text-red-500 transition p-1 absolute top-3 right-3 opacity-0 group-hover:opacity-100"
+                            title="删除"
+                        >
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    </div>
+                    <p class="text-gray-600 text-sm mb-4 line-clamp-3 h-16 whitespace-pre-wrap">{{ note.content || '无内容...' }}</p>
+                    <div class="flex justify-between items-center text-xs text-gray-500 border-t border-black/5 pt-3">
+                        <span><i class="fa-regular fa-clock mr-1"></i>{{ formatDate(note.updatedAt) }}</span>
+                    </div>
+                </div>
+            `,
+            setup(props) {
+                // 根据颜色ID返回 Tailwind 类名
+                const colorClass = computed(() => {
+                    const colors = {
+                        yellow: 'bg-yellow-50 hover:border-yellow-200',
+                        green: 'bg-green-50 hover:border-green-200',
+                        blue: 'bg-blue-50 hover:border-blue-200',
+                        pink: 'bg-pink-50 hover:border-pink-200',
+                        purple: 'bg-purple-50 hover:border-purple-200',
+                        white: 'bg-white hover:border-gray-200'
+                    };
+                    return colors[props.note.color] || colors.white;
+                });
+
+                const formatDate = (timestamp) => {
+                    return new Date(timestamp).toLocaleString('zh-CN', {
+                        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                    });
+                };
+
+                return { colorClass, formatDate };
+            }
+        };
+
+        // --- 组件 2: NoteEditor (编辑/新增器) ---
+        // 职责：处理表单输入，颜色选择，验证
+        const NoteEditor = {
+            props: ['initialData'],
+            emits: ['save', 'close'],
+            template: `
+                <div class="fixed inset-0 bg-black bg-opacity-40 z-50 flex items-center justify-center p-4 backdrop-blur-sm" @click.self="$emit('close')">
+                    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-200">
+                        <!-- 模态框头部 -->
+                        <div class="p-4 border-b flex justify-between items-center bg-gray-50">
+                            <h2 class="text-lg font-bold text-gray-700">{{ isEditing ? '编辑笔记' : '新建笔记' }}</h2>
+                            <button @click="$emit('close')" class="text-gray-400 hover:text-gray-600 w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-200 transition">
+                                <i class="fa-solid fa-xmark text-lg"></i>
+                            </button>
+                        </div>
+                        
+                        <!-- 表单内容 -->
+                        <div class="p-6 overflow-y-auto">
+                            <input 
+                                v-model="form.title" 
+                                type="text" 
+                                placeholder="标题" 
+                                class="w-full text-xl font-bold placeholder-gray-400 border-none outline-none mb-4 bg-transparent"
+                                autofocus
+                            >
+                            <textarea 
+                                v-model="form.content" 
+                                placeholder="在此输入内容..." 
+                                class="w-full h-40 resize-none text-gray-600 border-none outline-none bg-transparent leading-relaxed"
+                            ></textarea>
+                            
+                            <!-- 颜色选择器 -->
+                            <div class="mt-4">
+                                <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider block mb-2">选择颜色</label>
+                                <div class="flex gap-3">
+                                    <button 
+                                        v-for="color in colors" 
+                                        :key="color.value"
+                                        @click="form.color = color.value"
+                                        class="w-8 h-8 rounded-full border-2 transition transform hover:scale-110 focus:outline-none"
+                                        :class="[color.bgClass, form.color === color.value ? 'border-gray-600 scale-110' : 'border-transparent']"
+                                    ></button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 底部按钮 -->
+                        <div class="p-4 border-t bg-gray-50 flex justify-end gap-3">
+                            <button @click="$emit('close')" class="px-5 py-2 text-gray-600 hover:bg-gray-200 rounded-lg transition text-sm font-medium">取消</button>
+                            <button 
+                                @click="handleSave" 
+                                class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition shadow-md text-sm font-medium flex items-center"
+                                :disabled="!form.title && !form.content"
+                                :class="{'opacity-50 cursor-not-allowed': !form.title && !form.content}"
+                            >
+                                <i class="fa-solid fa-check mr-2"></i> 保存
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `,
+            setup(props, { emit }) {
+                const isEditing = computed(() => !!props.initialData);
+                
+                // 表单数据初始化
+                const form = ref({
+                    id: props.initialData ? props.initialData.id : null,
+                    title: props.initialData ? props.initialData.title : '',
+                    content: props.initialData ? props.initialData.content : '',
+                    color: props.initialData ? props.initialData.color : 'white',
+                    createdAt: props.initialData ? props.initialData.createdAt : Date.now(),
+                });
+
+                const colors = [
+                    { value: 'white', bgClass: 'bg-white border-gray-200' },
+                    { value: 'yellow', bgClass: 'bg-yellow-200' },
+                    { value: 'green', bgClass: 'bg-green-200' },
+                    { value: 'blue', bgClass: 'bg-blue-200' },
+                    { value: 'pink', bgClass: 'bg-pink-200' },
+                    { value: 'purple', bgClass: 'bg-purple-200' },
+                ];
+
+                const handleSave = () => {
+                    if (!form.value.title.trim() && !form.value.content.trim()) return;
+                    
+                    const noteData = {
+                        ...form.value,
+                        updatedAt: Date.now(),
+                        // 如果是新建，生成ID
+                        id: form.value.id || Date.now().toString()
+                    };
+                    emit('save', noteData);
+                    emit('close');
+                };
+
+                return { form, colors, isEditing, handleSave };
+            }
+        };
+
+        // --- 根组件 (App) ---
+        const App = {
+            components: {
+                NoteCard,
+                NoteEditor
+            },
+            setup() {
+                const notes = ref([]);
+                const showEditor = ref(false);
+                const currentNote = ref(null);
+                const searchQuery = ref('');
+
+                // 从 LocalStorage 加载数据
+                onMounted(() => {
+                    const savedNotes = localStorage.getItem('vue-notepad-data');
+                    if (savedNotes) {
+                        notes.value = JSON.parse(savedNotes);
+                    } else {
+                        // 默认初始数据
+                        notes.value = [
+                            { id: '1', title: '欢迎使用随心记', content: '这是一个基于 Vue 3 的多组件记事本。\n\n你可以点击右下角的按钮添加新笔记。点击卡片可以编辑，右上角图标可以删除。', color: 'yellow', updatedAt: Date.now(), createdAt: Date.now() },
+                            { id: '2', title: '购物清单', content: '- 牛奶\n- 鸡蛋\n- 面包\n- 咖啡豆', color: 'blue', updatedAt: Date.now() - 100000, createdAt: Date.now() }
+                        ];
+                    }
+                });
+
+                // 监听数据变化，自动保存
+                watch(notes, (newVal) => {
+                    localStorage.setItem('vue-notepad-data', JSON.stringify(newVal));
+                }, { deep: true });
+
+                // 计算属性：过滤搜索
+                const filteredNotes = computed(() => {
+                    if (!searchQuery.value) return notes.value.sort((a, b) => b.updatedAt - a.updatedAt);
+                    
+                    const query = searchQuery.value.toLowerCase();
+                    return notes.value.filter(note => 
+                        note.title.toLowerCase().includes(query) || 
+                        note.content.toLowerCase().includes(query)
+                    ).sort((a, b) => b.updatedAt - a.updatedAt);
+                });
+
+                // 打开编辑器
+                const openEditor = (note) => {
+                    currentNote.value = note ? JSON.parse(JSON.stringify(note)) : null; // 深拷贝防止直接修改列表
+                    showEditor.value = true;
+                };
+
+                // 关闭编辑器
+                const closeEditor = () => {
+                    showEditor.value = false;
+                    currentNote.value = null;
+                };
+
+                // 保存笔记（新增或更新）
+                const saveNote = (noteData) => {
+                    const index = notes.value.findIndex(n => n.id === noteData.id);
+                    if (index !== -1) {
+                        // 更新
+                        notes.value[index] = noteData;
+                    } else {
+                        // 新增
+                        notes.value.unshift(noteData);
+                    }
+                };
+
+                // 删除笔记
+                const deleteNote = (id) => {
+                    if(confirm('确定要删除这条笔记吗？')) {
+                        notes.value = notes.value.filter(n => n.id !== id);
+                    }
+                };
+
+                return {
+                    notes,
+                    searchQuery,
+                    filteredNotes,
+                    showEditor,
+                    currentNote,
+                    openEditor,
+                    closeEditor,
+                    saveNote,
+                    deleteNote
+                };
+            }
+        };
+
+        createApp(App).mount('#app');
+    </script>
+</body>
+</html>
+
